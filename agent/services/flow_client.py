@@ -734,7 +734,8 @@ class FlowClient:
                               project_id: str, scene_id: str,
                               aspect_ratio: str = "VIDEO_ASPECT_RATIO_PORTRAIT",
                               end_image_media_id: str = None,
-                              user_paygate_tier: str = "PAYGATE_TIER_TWO") -> dict:
+                              user_paygate_tier: str = "PAYGATE_TIER_TWO",
+                              reference_media_ids: list[str] | None = None) -> dict:
         """Submit an i2v generation. Returns operations for the poller."""
 
         import os
@@ -757,6 +758,8 @@ class FlowClient:
                     'projectId': _config.FLOW_PROJECT_ID or project_id,
                     'imageId': start_image_media_id,
                     'imageName': ui_assets.lookup(start_image_media_id, _config.FLOW_PROJECT_ID or project_id),
+                    'images': [{'imageId': mid, 'imageName': ui_assets.lookup(mid, _config.FLOW_PROJECT_ID or project_id)}
+                               for mid in dict.fromkeys([start_image_media_id] + (reference_media_ids or []))],
                     'prompt': prompt,
                     'aspect': aspect_ratio,
                 }, timeout=660)

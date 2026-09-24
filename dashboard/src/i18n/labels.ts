@@ -7,7 +7,8 @@ export function statusLabel(t: T, status: StatusType): string {
   return t(`common.status.${status.toLowerCase()}` as TranslationKey)
 }
 
-export function stateLabel(t: T, state: 'RUNNING' | 'QUEUED' | 'IDLE' | 'COMPLETED'): string {
+export function stateLabel(t: T, state: 'RUNNING' | 'QUEUED' | 'IDLE' | 'COMPLETED' | 'FAILED'): string {
+  if (state === 'FAILED') return t('common.status.failed')
   if (state === 'COMPLETED') return t('common.status.completed')
   return t(`common.state.${state.toLowerCase()}` as TranslationKey)
 }

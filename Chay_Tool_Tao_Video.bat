@@ -1,60 +1,57 @@
 @echo off
 chcp 65001 >nul
-title FlowKit Studio - Phan Doan Hoang Edition
-
-echo =====================================================================
-echo           FLOWKIT STUDIO - PHAN DOAN HOANG EDITION
-echo             Tao Video AI Tu Dong 1-Click Bang Google Flow
-echo =====================================================================
-echo.
-
+setlocal
 cd /d "%~dp0"
+title FlowKit Studio
 set "FLOW_VIDEO_TRANSPORT=ui"
 set "MAX_CONCURRENT_REQUESTS=1"
 set "STALE_PROCESSING_TIMEOUT=1800"
-
-:: Kiem tra Python
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [LOI] Khong tim thay Python! Vui long cai dat Python 3.10+
+  echo Can cai Python 3.12 va them vao PATH.
+  pause
+  exit /b 1
+)
+if not exist "dashboard\dist\index.html" (
+  where npm.cmd >nul 2>&1
+  if errorlevel 1 (
+    echo Can cai Node.js LTS de build dashboard lan dau.
     pause
     exit /b 1
+  )
+  pushd dashboard
+  call npm.cmd ci --no-audit --no-fund
+  if errorlevel 1 goto :build_failed
+  call npm.cmd run build
+  if errorlevel 1 goto :build_failed
+  popd
 )
-
-:: Tat tien trinh cu dang chiem port 8100 (neu co) de cap nhat code moi
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8100" ^| findstr "LISTENING"') do (
-    taskkill /F /PID %%a >nul 2>&1
+if not exist ".env" copy ".env.example" ".env" >nul
+python -c "import fastapi, uvicorn, aiosqlite" >nul 2>&1
+if errorlevel 1 (
+  python -m pip install -r requirements.txt
+  if errorlevel 1 (
+    echo Khong cai duoc thu vien Python.
+    pause
+    exit /b 1
+  )
 )
-
-:: Kiem tra file .env
-if not exist ".env" (
-    echo [THONG BAO] Chua co file cau hinh .env.
-    echo Neu ban da co Project ID tu flow.google.com, hay nhap vao day:
-    echo (Neu chua co, ban co the nhan Enter de cau hinh truc tiep tren Web)
-    set /p FLOW_ID="Nhap FLOW_PROJECT_ID: "
-    if not "%FLOW_ID%"=="" (
-        echo FLOW_PROJECT_ID=%FLOW_ID%> .env
-        echo Da luu cau hinh!
-    )
+echo Dashboard: http://127.0.0.1:8100/
+echo Studio: http://127.0.0.1:8100/studio
+echo Giu tab du an Google Flow mo trong Chrome.
+echo Dong cua so nay de dung backend. Khong mo nhieu ban cung luc.
+python -c "import urllib.request; urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:8100/health', timeout=2)" >nul 2>&1
+if not errorlevel 1 (
+  echo Backend da chay. Dang mo dashboard hien tai.
+  start "" http://127.0.0.1:8100/
+  exit /b 0
 )
-
-echo.
-echo [1/2] Dang khoi dong may chu FlowKit Backend (Port 8100)...
-start /b python -m agent.main
-
-timeout /t 3 /nobreak >nul
-
-echo [2/2] Dang mo giao dien Web Studio tren trinh duyet...
-start http://127.0.0.1:8100/studio?v=%RANDOM%
-
-echo.
-echo =====================================================================
-echo  MAY CHU DANG CHAY TAI: http://127.0.0.1:8100/studio
-echo.
-echo  Luu y quan trong:
-echo  1. Mo trinh duyet Chrome va dang nhap flow.google.com (luon giu tab nay).
-echo  2. Vao web http://127.0.0.1:8100/studio de tao video chi voi 1-Click!
-echo =====================================================================
-echo.
-echo Nhan phim bat ky hoac dong cua so nay de tat may chu.
-pause >nul
+start "" http://127.0.0.1:8100/
+python -m agent.main
+pause
+exit /b
+:build_failed
+popd
+echo Build dashboard that bai. Xem loi ben tren.
+pause
+exit /b 1

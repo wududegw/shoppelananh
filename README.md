@@ -1,3 +1,5 @@
+> **FlowKit Studio — dashboard trắng và xanh lá.** Giữ đầy đủ dashboard gốc, tích hợp Studio thời trang và duyệt kịch bản từng cảnh. Xem [hướng dẫn Windows và giới hạn thực tế](docs/STUDIO_WINDOWS.md).
+
 <p align="center">
   <img src="docs/images/flowkit_banner.svg" width="720" alt="FLOW KIT" />
 </p>

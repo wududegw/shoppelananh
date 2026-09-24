@@ -16,6 +16,7 @@ import LogsPage from './pages/LogsPage'
 import GalleryPage from './pages/GalleryPage'
 import GuidePage from './pages/GuidePage'
 import SettingsPage from './pages/SettingsPage'
+import StudioPage, { FlowConnection } from './pages/StudioPage'
 
 const NAV: { to: string; icon: typeof LayoutDashboard; labelKey: TranslationKey; exact: boolean }[] = [
   { to: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard', exact: true },
@@ -55,7 +56,8 @@ function useBreadcrumbs() {
   }, [id])
 
   const crumbs: string[] = []
-  if (loc.pathname === '/') crumbs.push(t('app.breadcrumb.dashboard'))
+  if (loc.pathname === '/studio') crumbs.push('Studio thời trang')
+  else if (loc.pathname === '/') crumbs.push(t('app.breadcrumb.dashboard'))
   else if (loc.pathname.startsWith('/projects')) {
     crumbs.push(t('app.breadcrumb.projects'))
     if (id) {
@@ -98,16 +100,17 @@ function Sidebar() {
   }, [])
 
   return (
-    <aside className="w-52 flex-shrink-0 flex flex-col border-r" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+    <aside className="app-sidebar w-52 flex-shrink-0 flex flex-col border-r" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
       <div className="px-4 py-4 flex items-center gap-2.5 border-b" style={{ borderColor: 'var(--border)' }}>
         <span className="w-[22px] h-[22px] rounded flex items-center justify-center text-xs font-bold" style={{ background: 'var(--accent)', color: 'var(--bg)' }}>F</span>
         <div className="flex flex-col">
-          <span className="text-xs font-bold tracking-widest">{t('app.brandName')}</span>
-          <span className="text-[9px] tracking-wide" style={{ color: 'var(--muted)' }}>{t('app.brandTag')}</span>
+          <span className="text-xs font-bold tracking-widest">FlowKit Studio</span>
+          <span className="text-[9px] tracking-wide" style={{ color: 'var(--muted)' }}>Không gian sáng tạo</span>
         </div>
       </div>
 
       <nav className="flex flex-col gap-0.5 px-2.5 py-3">
+        <NavLink to="/studio" className={({isActive}) => `studio-nav ${isActive ? 'active' : ''}`}><Film size={17} /><span>Studio thời trang</span><span className="studio-nav-new">MỚI</span></NavLink>
         {NAV.map(({ to, icon: Icon, labelKey, exact }) => (
           <NavLink
             key={to}
@@ -178,19 +181,21 @@ function Header() {
 
 function Layout() {
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
+    <div className="app-shell flex h-screen overflow-hidden" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
       <Sidebar />
       <div className="flex flex-col flex-1 overflow-hidden">
         <Header />
-        <main className="flex-1 overflow-auto p-5">
+        <main className="app-main flex-1 overflow-auto p-5">
           <Routes>
             <Route path="/" element={<DashboardPage />} />
+            <Route path="/studio" element={<StudioPage />} />
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/projects/:id" element={<ProjectsPage />} />
             <Route path="/gallery" element={<GalleryPage />} />
             <Route path="/logs" element={<LogsPage />} />
             <Route path="/guide" element={<GuidePage />} />
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings" element={<div className="space-y-5"><FlowConnection /><SettingsPage /></div>} />
+            <Route path="*" element={<div>Không tìm thấy trang. <NavLink to="/">Về tổng quan</NavLink></div>} />
           </Routes>
         </main>
       </div>

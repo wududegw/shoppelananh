@@ -1,3 +1,4 @@
+import { videoState } from "../lib/videoState"
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { fetchAPI } from '../api/client'
@@ -86,15 +87,16 @@ export default function DashboardPage() {
     ).length
   }, 0)
 
+  const activeVideoCount = new Set(requests.filter(r => ['PENDING', 'PROCESSING'].includes(r.status) && r.video_id).map(r => r.video_id)).size
   const todayStr = new Date().toDateString()
   const completedToday = requests.filter(r => r.status === 'COMPLETED' && new Date(r.updated_at).toDateString() === todayStr).length
   const failed24h = requests.filter(r => r.status === 'FAILED' && new Date().getTime() - new Date(r.updated_at).getTime() <= 24 * 3600 * 1000).length
 
   const kpis: { id: string; labelKey: TranslationKey; value: number; color: string; note: string }[] = [
-    { id: 'scenesInFlight', labelKey: 'dashboard.kpi.scenesInFlight', value: scenesInFlight, color: 'var(--yellow)', note: t('dashboard.kpi.note.scenesInFlight', { n: allVideos.length }) },
+    { id: 'scenesInFlight', labelKey: 'dashboard.kpi.scenesInFlight', value: scenesInFlight, color: 'var(--yellow)', note: t('dashboard.kpi.note.scenesInFlight', { n: activeVideoCount }) },
     { id: 'completedToday', labelKey: 'dashboard.kpi.completedToday', value: completedToday, color: 'var(--green)', note: t('dashboard.kpi.note.completedToday', { n: requests.length }) },
     { id: 'failed24h', labelKey: 'dashboard.kpi.failed24h', value: failed24h, color: 'var(--red)', note: t('dashboard.kpi.note.failed24h', { n: requests.filter(r => r.status === 'FAILED').length }) },
-    { id: 'activeProjects', labelKey: 'dashboard.kpi.activeProjects', value: projects.length, color: 'var(--text)', note: t('dashboard.kpi.note.activeProjects', { n: allVideos.length }) },
+    { id: 'activeProjects', labelKey: 'dashboard.kpi.activeProjects', value: projects.length, color: 'var(--text)', note: t('dashboard.kpi.note.activeProjects', { n: activeVideoCount }) },
   ]
 
   const throughputRows = allVideos.map(v => {
@@ -102,9 +104,7 @@ export default function DashboardPage() {
     const breakdown = videoStageBreakdown(scenes)
     const total = scenes.length
     const vidRequests = requests.filter(r => r.video_id === v.id)
-    const anyProcessing = vidRequests.some(r => r.status === 'PROCESSING')
-    const allDone = total > 0 && (['image', 'video', 'upscale'] as const).every(k => breakdown[k].done === total)
-    const state: 'COMPLETED' | 'RUNNING' | 'QUEUED' = allDone ? 'COMPLETED' : anyProcessing ? 'RUNNING' : 'QUEUED'
+    const state = videoState(v, vidRequests)
     return { video: v, breakdown, total, state }
   })
 
@@ -128,7 +128,7 @@ export default function DashboardPage() {
   return (
     <div className="flex flex-col gap-5">
       {/* KPI cards */}
-      <div className="grid grid-cols-4 gap-3.5">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3.5">
         {kpis.map(k => (
           <Card key={k.id} className="py-4 gap-2">
             <CardHeader>
@@ -144,7 +144,7 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      <div className="grid gap-4 items-start" style={{ gridTemplateColumns: '1.55fr 1fr' }}>
+      <div className="grid grid-cols-1 xl:grid-cols-[1.55fr_1fr] gap-4 items-start">
         {/* Throughput table */}
         <Card className="py-4">
           <CardHeader>

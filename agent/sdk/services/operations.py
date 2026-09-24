@@ -461,6 +461,13 @@ class OperationService:
             operations = [{"operation": {"name": existing_op}, "status": "MEDIA_GENERATION_STATUS_PENDING"}]
             return await _poll_operations(self._client, operations)
 
+        extra = {}
+        if project and (project.get("story") or "").startswith("Fashion Studio:"):
+            import os
+            if os.environ.get("FLOW_VIDEO_TRANSPORT") == "ui":
+                refs = await crud.get_project_characters(pid)
+                extra["reference_media_ids"] = [c["media_id"] for c in sorted(refs, key=lambda c: {"TrangPhucGoc": 0, "NguoiMau": 1, "BoiCanh": 2}.get(c["name"], 3)) if c.get("media_id")]
+
         submit_result = await self._client.generate_video(
             start_image_media_id=image_media_id,
             prompt=prompt,
@@ -469,6 +476,7 @@ class OperationService:
             aspect_ratio=aspect,
             end_image_media_id=end_id,
             user_paygate_tier=tier,
+            **extra,
         )
 
         if _is_error(submit_result):

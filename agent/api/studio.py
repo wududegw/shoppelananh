@@ -12,7 +12,7 @@ import uuid
 import logging
 import urllib.request
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
@@ -22,6 +22,7 @@ import agent.config as config
 from agent.db import crud
 from agent.services.flow_client import get_flow_client
 from agent.services.post_process import merge_videos, trim_video
+from agent.services.studio_plan import build_scene_plan
 from agent.worker.processor import get_worker_controller
 
 logger = logging.getLogger(__name__)
@@ -64,13 +65,10 @@ class AdvancedFashionVideoRequest(BaseModel):
         default="Người mẫu tự tin sải bước catwalk, váy áo chuyển động mềm mại theo từng nhịp bước, camera lia góc 180 độ cận cảnh chất vải, sau đó dừng lại tạo dáng sang chảnh."
     )
     # 5. Settings
-    duration_seconds: int = Field(default=15)  # 15, 30, 60
-    orientation: str = Field(default="VERTICAL")  # VERTICAL (9:16) or HORIZONTAL (16:9)
-
-
-@router.get("/", response_class=HTMLResponse)
-async def root_redirect():
-    return RedirectResponse(url="/studio")
+    duration_seconds: Literal[15, 30, 60] = 15  # 15, 30, 60
+    orientation: Literal["VERTICAL", "HORIZONTAL"] = "VERTICAL"
+    subject_mode: Literal["adult", "child", "product"] = "adult"
+    scene_actions: Optional[List[str]] = None  # VERTICAL (9:16) or HORIZONTAL (16:9)
 
 
 @router.get("/api/studio/status")
@@ -89,7 +87,12 @@ async def get_studio_status():
 
 @router.post("/api/studio/config")
 async def update_studio_config(body: ConfigUpdateRequest):
-    new_pid = body.flow_project_id.strip()
+    if any(job["status"] == "PROCESSING" for job in _STUDIO_JOBS.values()):
+        raise HTTPException(409, "Không đổi dự án Flow khi video đang chạy.")
+    try:
+        new_pid = str(uuid.UUID(body.flow_project_id.strip()))
+    except ValueError as exc:
+        raise HTTPException(422, "Project ID phải là UUID hợp lệ.") from exc
     config.FLOW_PROJECT_ID = new_pid
     os.environ["FLOW_PROJECT_ID"] = new_pid
 
@@ -134,7 +137,7 @@ async def studio_upload_image(body: UploadBase64ImageRequest):
         raise HTTPException(503, "Extension chưa kết nối! Vui lòng mở Chrome đăng nhập flow.google.com")
     if os.environ.get('FLOW_VIDEO_TRANSPORT', 'batch') == 'ui':
         await _check_ui_ready()
-    
+
     b64_str = body.image_base64
     mime = "image/png"
     if "," in b64_str:
@@ -160,13 +163,13 @@ async def studio_upload_image(body: UploadBase64ImageRequest):
     )
     if result.get("error") or (isinstance(result.get("status"), int) and result["status"] >= 400):
         raise HTTPException(result.get("status", 502), result.get("error", result.get("data")))
-    
+
     media_id = result.get("_mediaId")
     if not media_id:
         data_raw = result.get("data", {})
         if isinstance(data_raw, dict):
             media_id = data_raw.get("media", {}).get("name")
-    
+
     return {
         "media_id": media_id,
         "local_path": str(local_file),
@@ -204,7 +207,7 @@ async def list_outputs():
 @router.get("/api/studio/stream/{filepath:path}")
 async def stream_video(filepath: str):
     safe_path = (OUTPUT_DIR / filepath).resolve()
-    if not str(safe_path).startswith(str(OUTPUT_DIR.resolve())) or not safe_path.exists():
+    if not safe_path.is_relative_to(OUTPUT_DIR.resolve()) or not safe_path.is_file():
         raise HTTPException(status_code=404, detail="Video file not found")
     return FileResponse(safe_path, media_type="video/mp4", filename=safe_path.name)
 
@@ -254,6 +257,8 @@ async def _run_advanced_fashion_pipeline(job_id: str, req: AdvancedFashionVideoR
                 "media_id": model_mid,
             },
         ]
+        if req.subject_mode == "product":
+            characters_payload = characters_payload[:1]
         if req.location_media_id:
             characters_payload.append({
                 "name": "BoiCanh",
@@ -264,7 +269,7 @@ async def _run_advanced_fashion_pipeline(job_id: str, req: AdvancedFashionVideoR
 
         project = await crud.create_project(
             name=req.title,
-            story=f"Fashion Runway: {req.title}. Model: {req.model_prompt}. Outfit: {req.clothing_prompt}. Setting: {req.location_prompt}",
+            story=f"Fashion Studio: {req.title}. Model: {req.model_prompt}. Outfit: {req.clothing_prompt}. Setting: {req.location_prompt}",
             material="realistic",
         )
         pid = project["id"]
@@ -293,43 +298,11 @@ async def _run_advanced_fashion_pipeline(job_id: str, req: AdvancedFashionVideoR
         vid = video["id"]
         job["video_id"] = vid
 
-        active_char_names = ["TrangPhucGoc", "NguoiMau"]
+        active_char_names = ["TrangPhucGoc"] if req.subject_mode == "product" else ["TrangPhucGoc", "NguoiMau"]
         if req.location_media_id:
             active_char_names.append("BoiCanh")
 
-        # Camera & Director angles
-        scene_directives = [
-            {
-                "title": "Toàn Cảnh Catwalk",
-                "prompt": f"NguoiMau wearing TrangPhucGoc walking catwalk in {req.location_prompt}. Full body wide shot, confident elegant stride.",
-                "video_prompt": f"0-5s: Smooth wide tracking backward shot. NguoiMau strides forward with catwalk presence wearing TrangPhucGoc in {req.location_prompt}. Fabric flows naturally. Cinematic slow motion 60fps. {req.motion_prompt}",
-            },
-            {
-                "title": "Quay Cận Cảnh 180° Orbit",
-                "prompt": f"NguoiMau medium shot wearing TrangPhucGoc at {req.location_prompt}. Detailed fabric texture, high fashion posing.",
-                "video_prompt": f"0-5s: Medium close-up, smooth 180-degree orbit arc camera shot around NguoiMau. Focus on the luxury fabric, textures, cuts and fine details of TrangPhucGoc. Shallow depth of field, creamy bokeh.",
-            },
-            {
-                "title": "Góc Thấp Tạo Dáng Kết Màn",
-                "prompt": f"NguoiMau stops, turns toward camera wearing TrangPhucGoc at {req.location_prompt}. Dramatic rim light.",
-                "video_prompt": f"0-5s: Low angle shot looking up. NguoiMau stops gracefully, strikes high fashion pose showcasing both back and front of TrangPhucGoc. Fierce confident gaze at camera. Locked-off static, dramatic rim light.",
-            },
-            {
-                "title": "Góc Nghiêng Chuyển Động (Side Profile)",
-                "prompt": f"Side profile shot of NguoiMau walking slowly in {req.location_prompt} wearing TrangPhucGoc.",
-                "video_prompt": f"0-5s: Smooth side-tracking camera movement. NguoiMau moves gracefully in profile view, showcasing the elegant drape and silhouette of TrangPhucGoc.",
-            },
-            {
-                "title": "Chi Tiết Đường May & Chất Liệu",
-                "prompt": f"Extreme close-up on the intricate details, seams, and fabric tailoring of TrangPhucGoc on NguoiMau in {req.location_prompt}.",
-                "video_prompt": f"0-5s: Slow macro pan across the tailoring details and material of TrangPhucGoc. Luxury editorial commercial feel.",
-            },
-            {
-                "title": "Grand Finale Runway",
-                "prompt": f"NguoiMau grand finale runway pose, smiling confidently in TrangPhucGoc at {req.location_prompt}.",
-                "video_prompt": f"0-5s: Wide runway walk, flashlights blinking, NguoiMau performs final turn and strike pose facing the audience.",
-            }
-        ]
+        scene_directives = build_scene_plan(req)
 
         created_scenes = []
         prefix = "vertical" if req.orientation == "VERTICAL" else "horizontal"
@@ -339,14 +312,12 @@ async def _run_advanced_fashion_pipeline(job_id: str, req: AdvancedFashionVideoR
                 video_id=vid,
                 display_order=i,
                 prompt=d["prompt"],
-                video_prompt=d["video_prompt"],
+                video_prompt=d["prompt"],
                 character_names=active_char_names,
                 chain_type="ROOT",
                 parent_scene_id=None,
             )
-            # All scenes directly use the uploaded clothing/model image as their starting frame!
-            # This ensures 100% fidelity to the user's uploaded outfit, avoids model drift,
-            # and prevents UNUSUAL_ACTIVITY from redundant image generation calls.
+            # The same source and optional reference images are reused in every clip.
             await crud.update_scene(
                 sc["id"],
                 **{f"{prefix}_image_media_id": req.clothing_media_id, f"{prefix}_image_status": "COMPLETED"}
@@ -453,8 +424,21 @@ async def _run_advanced_fashion_pipeline(job_id: str, req: AdvancedFashionVideoR
         job["logs"].append(f"[{time.strftime('%H:%M:%S')}] ❌ LỖI: {str(e)}")
 
 
+@router.post("/api/studio/plan")
+async def preview_plan(body: AdvancedFashionVideoRequest):
+    try:
+        return {"scenes": build_scene_plan(body), "duration_seconds": body.duration_seconds}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.post("/api/studio/generate-advanced")
 async def start_advanced_pipeline(body: AdvancedFashionVideoRequest, background_tasks: BackgroundTasks):
+    await preview_plan(body)
+    if not body.clothing_media_id:
+        raise HTTPException(422, "Hãy tải ảnh trang phục lên trước.")
+    if any(job["status"] == "PROCESSING" for job in _STUDIO_JOBS.values()):
+        raise HTTPException(409, "Đang có một video Studio chạy. Hãy chờ video hiện tại hoàn tất.")
     if os.environ.get('FLOW_VIDEO_TRANSPORT', 'batch') == 'ui':
         await _check_ui_ready()
     job_id = str(uuid.uuid4())
@@ -528,10 +512,10 @@ _STUDIO_HTML = """<!DOCTYPE html>
 
   <!-- Main Container -->
   <main class="flex-1 max-w-7xl w-full mx-auto p-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
-    
+
     <!-- Left Column: Visual Prompt Builder (7 cols) -->
     <div class="lg:col-span-7 space-y-6">
-      
+
       <form onsubmit="startAdvancedGeneration(event)" class="space-y-6">
 
         <!-- TITLE BAR -->
@@ -705,7 +689,7 @@ _STUDIO_HTML = """<!DOCTYPE html>
 
     <!-- Right Column: Live Monitor & Video Output (5 cols) -->
     <div class="lg:col-span-5 space-y-6">
-      
+
       <!-- Video Player Card -->
       <div class="card-white p-6 rounded-2xl flex flex-col justify-between min-h-[460px]">
         <div>
@@ -749,7 +733,7 @@ _STUDIO_HTML = """<!DOCTYPE html>
           <div class="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
             <div id="progress-bar" class="bg-gradient-blue h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
           </div>
-          
+
           <div class="mt-2">
             <div class="bg-slate-900 rounded-xl p-3 text-[11px] font-mono text-slate-300 max-h-28 overflow-y-auto" id="log-box">
               Chờ khởi động...
@@ -807,7 +791,7 @@ _STUDIO_HTML = """<!DOCTYPE html>
         const res = await fetch('/api/studio/status');
         const data = await res.json();
         const badge = document.getElementById('ext-status');
-        
+
         if (data.extension_connected) {
           badge.innerHTML = '<span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span><span class="text-emerald-700">Extension đã kết nối</span>';
           badge.className = 'flex items-center space-x-2 text-xs font-semibold px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200';
@@ -951,7 +935,7 @@ _STUDIO_HTML = """<!DOCTYPE html>
         });
         const data = await res.json();
         activeJobId = data.job_id;
-        
+
         if (pollInterval) clearInterval(pollInterval);
         pollInterval = setInterval(pollJob, 2500);
       } catch (err) {
@@ -978,7 +962,7 @@ _STUDIO_HTML = """<!DOCTYPE html>
 
         if (job.status === 'COMPLETED') {
           clearInterval(pollInterval);
-          
+
           const btn = document.getElementById('btn-submit');
           btn.disabled = false;
           btn.classList.remove('opacity-50');
@@ -998,7 +982,7 @@ _STUDIO_HTML = """<!DOCTYPE html>
           loadOutputs();
         } else if (job.status === 'FAILED') {
           clearInterval(pollInterval);
-          
+
           const btn = document.getElementById('btn-submit');
           btn.disabled = false;
           btn.classList.remove('opacity-50');
@@ -1061,7 +1045,7 @@ _STUDIO_HTML = """<!DOCTYPE html>
 """
 
 
-@router.get("/studio", response_class=HTMLResponse)
+@router.get("/studio-legacy", response_class=HTMLResponse)
 async def serve_studio():
     return HTMLResponse(
         content=_STUDIO_HTML,

@@ -231,6 +231,12 @@ async def dashboard_ws(websocket: WebSocket):
         event_bus.unsubscribe(q)
 
 
+from fastapi.staticfiles import StaticFiles
+from agent.api.dashboard import router as dashboard_router, DIST as DASHBOARD_DIST
+app.mount("/assets", StaticFiles(directory=str(DASHBOARD_DIST / "assets"), check_dir=False), name="dashboard-assets")
+app.include_router(dashboard_router)
+
+
 if __name__ == "__main__":
     import os
     import uvicorn

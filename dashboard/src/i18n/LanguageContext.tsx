@@ -11,7 +11,7 @@ function detectDefaultLang(): Lang {
   } catch {
     // localStorage unavailable — fall through to browser language detection
   }
-  const nav = (navigator.language || 'en').slice(0, 2).toLowerCase()
+  const nav = 'vi'
   return (LANGS as readonly string[]).includes(nav) ? (nav as Lang) : 'en'
 }
 

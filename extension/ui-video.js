@@ -1,6 +1,6 @@
 // Use Flow's visible composer. Submission is never retried automatically.
 (() => {
-  if (globalThis.flowKitUI?.version === 13) return;
+  if (globalThis.flowKitUI?.version === 15) return;
   let busy = false;
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const shown = e => !!e?.getClientRects().length;
@@ -17,7 +17,10 @@
   const reason = 'Mở trang project Flow, đóng khung trò chuyện Agent (dấu ×), để hiện ô tạo ở dưới cùng rồi thử lại.';
   function probe() {
     const ready = settings().length === 1 && !!editor() && !location.pathname.includes('/edit/');
-    return {version: 13, ready, reason: ready ? '' : reason, path: location.pathname};
+    const input = editor();
+    return {version: 15, ready, reason: ready ? '' : reason, path: location.pathname,
+      promptState: {textLength: clean(input?.textContent).length, renderedLength: clean(input?.innerText).length,
+        paragraphs: input?.querySelectorAll('p').length || 0, breaks: input?.querySelectorAll('br').length || 0}};
   }
   async function waitFor(read, message, timeout = 15000) {
     const end = Date.now() + timeout;
@@ -42,8 +45,30 @@
     if (option.getAttribute('aria-checked') !== 'true') option.click();
     await waitFor(() => names.map(radio).some(e => e?.getAttribute('aria-checked') === 'true'), `Không chọn được ${names.join('/')}`);
   }
+  async function insertPrompt(prompt) {
+    // ProseMirror may split multiline insertText into paragraphs: textContent
+    // joins them without separators. Send the same words as one paragraph.
+    const expected = clean(prompt);
+    if (!expected) throw new Error('Prompt trống; chưa gửi yêu cầu');
+    const input = editor();
+    if (!input || clean(input.innerText || input.textContent)) throw new Error('Ô prompt đang có nội dung; chưa gửi yêu cầu');
+    input.focus();
+    const range = document.createRange();
+    range.selectNodeContents(input);
+    range.collapse(false);
+    const selection = document.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    // The command's boolean is not a reliable acknowledgement. Check the
+    // editor after its update instead; never insert a second time on failure.
+    document.execCommand('insertText', false, expected);
+    await waitFor(() => {
+      const current = editor();
+      return current && clean(current.innerText || current.textContent) === expected;
+    }, 'Không nhập được prompt; chưa gửi yêu cầu', 3000);
+  }
   globalThis.flowKitUI = {
-    version: 13,
+    version: 15,
     async run(params) {
       if (params.mode === 'probe') return probe();
       if (busy) return {error: 'UI_VIDEO: Tab đang tạo video khác'};
@@ -70,12 +95,15 @@
         await select(['x1']);
         settings()[0].click();
         await waitFor(() => !radio('Video'), 'Không đóng được bảng cài đặt');
+        const images = params.images?.length ? params.images : [{imageId: params.imageId, imageName: params.imageName}];
+        if (images.length > 3) throw new Error('Tối đa 3 ảnh tham chiếu cho Studio');
+        for (const asset of images) {
         await click(['Thêm thành phần vào ô nhập câu lệnh', 'Add assets to prompt']);
         const source = await waitFor(() => {
           const matches = all('[role="option"]').filter(e => {
             const img = e.querySelector('img');
             const name = clean(e.querySelector('.asset-title')?.textContent);
-            return img && ((params.imageName && name === params.imageName) || mediaId(img.src) === params.imageId);
+            return img && ((asset.imageName && name === asset.imageName) || mediaId(img.src) === asset.imageId);
           });
           if (matches.length > 1) throw new Error('Có nhiều ảnh nguồn trùng tên; hãy tải lại ảnh trong Studio');
           return matches[0];
@@ -84,9 +112,8 @@
         await pause(400);
         if (all('[role="option"]').length) await click(['Thêm vào câu lệnh', 'Add to prompt']);
         await waitFor(() => !all('[role="option"]').length, 'Không đóng được danh sách thành phần');
-        const input = editor();
-        input.focus();
-        if (!document.execCommand('insertText', false, params.prompt) || clean(input.textContent) !== clean(params.prompt)) throw new Error('Không nhập được prompt; chưa gửi yêu cầu');
+        }
+        await insertPrompt(params.prompt);
         const before = new Set(thumbs().map(e => key(e.src)));
         const priorFailures = (document.body.innerText.match(/Không thành công|Generation failed/g) || []).length;
         const generate = await waitFor(() => all('button').find(e => enabled(e) && ['Bắt đầu tạo', 'Start generation', 'Generate'].includes(label(e))), 'Nút tạo chưa sẵn sàng');
