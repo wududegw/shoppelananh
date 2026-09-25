@@ -461,6 +461,13 @@ class FlowClient:
                 self._pending_ws.pop(req_id, None)
 
             has_alternative = index + 1 < len(extension_candidates)
+            # Only this explicit pre-injection rejection is safe to route to
+            # another profile. Timeouts/disconnects may follow a paid submit.
+            if (method == 'ui_generate_video'
+                    and last_result.get('code') == 'UI_PROJECT_TAB_UNAVAILABLE'
+                    and has_alternative):
+                logger.info('Project tab absent in this extension; trying another profile')
+                continue
             if method != 'ui_generate_video' and self._should_failover(last_result) and has_alternative:
                 if extension_ws in self._extensions:
                     self._extensions[extension_ws]["unavailable_until"] = (

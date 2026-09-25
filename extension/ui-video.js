@@ -1,6 +1,6 @@
 // Use Flow's visible composer. Submission is never retried automatically.
 (() => {
-  if (globalThis.flowKitUI?.version === 15) return;
+  if (globalThis.flowKitUI?.version === 16) return;
   let busy = false;
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const shown = e => !!e?.getClientRects().length;
@@ -18,7 +18,7 @@
   function probe() {
     const ready = settings().length === 1 && !!editor() && !location.pathname.includes('/edit/');
     const input = editor();
-    return {version: 15, ready, reason: ready ? '' : reason, path: location.pathname,
+    return {version: 16, ready, reason: ready ? '' : reason, path: location.pathname,
       promptState: {textLength: clean(input?.textContent).length, renderedLength: clean(input?.innerText).length,
         paragraphs: input?.querySelectorAll('p').length || 0, breaks: input?.querySelectorAll('br').length || 0}};
   }
@@ -68,7 +68,7 @@
     }, 'Không nhập được prompt; chưa gửi yêu cầu', 3000);
   }
   globalThis.flowKitUI = {
-    version: 15,
+    version: 16,
     async run(params) {
       if (params.mode === 'probe') return probe();
       if (busy) return {error: 'UI_VIDEO: Tab đang tạo video khác'};
@@ -81,7 +81,7 @@
       busy = true;
       let submitted = false;
       try {
-        if (location.pathname !== `/project/${params.projectId}`) throw new Error(reason);
+        if (location.pathname.replace(/\/+$/, '').toLowerCase() !== `/project/${params.projectId.toLowerCase()}`) throw new Error(reason);
         await waitFor(() => probe().ready, reason);
         if (clean(editor().textContent)) throw new Error('Ô prompt đang có nội dung; hãy lưu hoặc xoá trước khi chạy tool');
         if (all('button').some(e => ['Xoá câu lệnh', 'Clear prompt'].includes(label(e)))) throw new Error('Ô tạo đang có ảnh được chọn; hãy lưu hoặc xoá lựa chọn trước khi chạy tool');

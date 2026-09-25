@@ -61,7 +61,7 @@ export function FlowConnection() {
   }
   return <section className="flow-connection">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="flex items-center gap-2"><span className={`connection-dot ${status?.extension_connected ? 'connected' : ''}`} /><strong>{status?.extension_connected ? 'Google Flow đã kết nối' : 'Chưa kết nối Google Flow'}</strong><span className="text-xs text-muted-foreground">{status?.flow_project_id ? `Dự án ${status.flow_project_id.slice(0, 8)}` : 'Chưa chọn dự án'}</span></div>
+      <div className="flex items-center gap-2"><span className={`connection-dot ${status?.extension_connected ? 'connected' : ''}`} /><strong>{status?.extension_connected ? 'Extension đã kết nối' : 'Chưa kết nối extension'}</strong><span className="text-xs text-muted-foreground">{status?.flow_project_id ? `Dự án ${status.flow_project_id.slice(0, 8)}` : 'Chưa chọn dự án'}</span></div>
       <button className="studio-button secondary" onClick={() => { setProject(status?.flow_project_id || ''); setEditing(!editing); setNotice('') }}><Settings2 size={14} /> Cấu hình Flow</button>
     </div>
     {editing && <div className="flex flex-wrap gap-2 mt-3"><input className="studio-input flex-1 min-w-48" aria-label="Project ID hoặc URL Google Flow" value={project} onChange={e => setProject(e.target.value)} placeholder="Dán URL dự án Google Flow" /><button className="studio-button" disabled={saving} onClick={save}>{saving ? 'Đang lưu…' : 'Lưu dự án'}</button></div>}

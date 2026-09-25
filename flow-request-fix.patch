@@ -1,0 +1,138 @@
+--- a/agent/services/flow_client.py
++++ b/agent/services/flow_client.py
+@@ -461,6 +461,13 @@
+                 self._pending_ws.pop(req_id, None)
+ 
+             has_alternative = index + 1 < len(extension_candidates)
++            # Only this explicit pre-injection rejection is safe to route to
++            # another profile. Timeouts/disconnects may follow a paid submit.
++            if (method == 'ui_generate_video'
++                    and last_result.get('code') == 'UI_PROJECT_TAB_UNAVAILABLE'
++                    and has_alternative):
++                logger.info('Project tab absent in this extension; trying another profile')
++                continue
+             if method != 'ui_generate_video' and self._should_failover(last_result) and has_alternative:
+                 if extension_ws in self._extensions:
+                     self._extensions[extension_ws]["unavailable_until"] = (
+--- a/dashboard/src/pages/StudioPage.tsx
++++ b/dashboard/src/pages/StudioPage.tsx
+@@ -61,7 +61,7 @@
+   }
+   return <section className="flow-connection">
+     <div className="flex flex-wrap items-center justify-between gap-3">
+-      <div className="flex items-center gap-2"><span className={`connection-dot ${status?.extension_connected ? 'connected' : ''}`} /><strong>{status?.extension_connected ? 'Google Flow đã kết nối' : 'Chưa kết nối Google Flow'}</strong><span className="text-xs text-muted-foreground">{status?.flow_project_id ? `Dự án ${status.flow_project_id.slice(0, 8)}` : 'Chưa chọn dự án'}</span></div>
++      <div className="flex items-center gap-2"><span className={`connection-dot ${status?.extension_connected ? 'connected' : ''}`} /><strong>{status?.extension_connected ? 'Extension đã kết nối' : 'Chưa kết nối extension'}</strong><span className="text-xs text-muted-foreground">{status?.flow_project_id ? `Dự án ${status.flow_project_id.slice(0, 8)}` : 'Chưa chọn dự án'}</span></div>
+       <button className="studio-button secondary" onClick={() => { setProject(status?.flow_project_id || ''); setEditing(!editing); setNotice('') }}><Settings2 size={14} /> Cấu hình Flow</button>
+     </div>
+     {editing && <div className="flex flex-wrap gap-2 mt-3"><input className="studio-input flex-1 min-w-48" aria-label="Project ID hoặc URL Google Flow" value={project} onChange={e => setProject(e.target.value)} placeholder="Dán URL dự án Google Flow" /><button className="studio-button" disabled={saving} onClick={save}>{saving ? 'Đang lưu…' : 'Lưu dự án'}</button></div>}
+--- a/extension/background.js
++++ b/extension/background.js
+@@ -298,22 +298,43 @@
+ }
+ 
+ async function handleUiVideo(msg) {
++  const mode = msg.params?.mode || 'generate';
++  addRequestLog({id: msg.id, type: `UI:${mode}`, time: new Date().toISOString(),
++    status: 'processing', error: null, url: 'ui_generate_video',
++    payloadSummary: `Project ${msg.params?.projectId || ''}`});
+   try {
+-    const projectId = msg.params?.projectId;
+-    if (!/^[0-9a-f-]{36}$/i.test(projectId || '')) throw new Error('Project ID không hợp lệ');
+-    const tabs = await chrome.tabs.query({url: `https://flow.google.com/project/${projectId}*`});
+-    const tab = tabs.find(t => t.active && !t.discarded) || tabs.find(t => !t.discarded);
+-    if (!tab) throw new Error('Mở đúng project Flow trong Chrome rồi thử lại');
++    const projectId = String(msg.params?.projectId || '').trim().toLowerCase();
++    if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(projectId)) throw new Error('Project ID không hợp lệ');
++    const tabs = await chrome.tabs.query({url: flowUrls});
++    const matching = tabs.filter(t => {
++      try {
++        const url = new URL(t.url);
++        return url.origin === 'https://flow.google.com' &&
++          url.pathname.replace(/\/+$/, '').toLowerCase() === `/project/${projectId}`;
++      } catch { return false; }
++    });
++    const tab = matching.find(t => t.active && !t.discarded) || matching.find(t => !t.discarded);
++    if (!tab) {
++      const reason = matching.length
++        ? 'Tab project đang ngủ. Chọn tab Flow để tải lại rồi thử lại.'
++        : `Không tìm thấy tab project ${projectId} trong profile Chrome đang kết nối. Mở liên kết dự án trong cùng profile đã cài Flow Kit; kiểm tra cả cửa sổ ẩn danh và các profile khác.`;
++      updateRequestLog(msg.id, {status: 'failed', error: reason});
++      // This response is sent before injecting or interacting with the page.
++      sendToAgent({id: msg.id, status: 409, code: 'UI_PROJECT_TAB_UNAVAILABLE', error: `UI_VIDEO: ${reason}`});
++      return;
++    }
+     await chrome.scripting.executeScript({target: {tabId: tab.id}, files: ['ui-video.js']});
+     const [response] = await chrome.scripting.executeScript({
+       target: {tabId: tab.id},
+       func: async params => globalThis.flowKitUI.run(params),
+-      args: [msg.params],
++      args: [{...msg.params, projectId}],
+     });
+     const result = response?.result;
+     if (!result || result.error) throw new Error(result?.error || 'Không nhận được kết quả từ tab Flow');
++    updateRequestLog(msg.id, {status: 'success', httpStatus: 200});
+     sendToAgent({id: msg.id, status: 200, data: result});
+   } catch (error) {
++    updateRequestLog(msg.id, {status: 'failed', error: error.message});
+     sendToAgent({id: msg.id, status: 502, error: `UI_VIDEO: ${error.message}`});
+   }
+ }
+--- a/extension/manifest.json
++++ b/extension/manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "manifest_version": 3,
+   "name": "Flow Kit",
+-  "version": "0.3.3",
++  "version": "0.3.4",
+   "description": "Local agent bridge for Google Flow — runs batchexecute RPCs inside a signed-in flow.google.com tab, mints reCAPTCHA, proxies API calls",
+   "permissions": [
+     "storage",
+--- a/extension/ui-video.js
++++ b/extension/ui-video.js
+@@ -1,6 +1,6 @@
+ // Use Flow's visible composer. Submission is never retried automatically.
+ (() => {
+-  if (globalThis.flowKitUI?.version === 15) return;
++  if (globalThis.flowKitUI?.version === 16) return;
+   let busy = false;
+   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+   const shown = e => !!e?.getClientRects().length;
+@@ -18,7 +18,7 @@
+   function probe() {
+     const ready = settings().length === 1 && !!editor() && !location.pathname.includes('/edit/');
+     const input = editor();
+-    return {version: 15, ready, reason: ready ? '' : reason, path: location.pathname,
++    return {version: 16, ready, reason: ready ? '' : reason, path: location.pathname,
+       promptState: {textLength: clean(input?.textContent).length, renderedLength: clean(input?.innerText).length,
+         paragraphs: input?.querySelectorAll('p').length || 0, breaks: input?.querySelectorAll('br').length || 0}};
+   }
+@@ -68,7 +68,7 @@
+     }, 'Không nhập được prompt; chưa gửi yêu cầu', 3000);
+   }
+   globalThis.flowKitUI = {
+-    version: 15,
++    version: 16,
+     async run(params) {
+       if (params.mode === 'probe') return probe();
+       if (busy) return {error: 'UI_VIDEO: Tab đang tạo video khác'};
+@@ -81,7 +81,7 @@
+       busy = true;
+       let submitted = false;
+       try {
+-        if (location.pathname !== `/project/${params.projectId}`) throw new Error(reason);
++        if (location.pathname.replace(/\/+$/, '').toLowerCase() !== `/project/${params.projectId.toLowerCase()}`) throw new Error(reason);
+         await waitFor(() => probe().ready, reason);
+         if (clean(editor().textContent)) throw new Error('Ô prompt đang có nội dung; hãy lưu hoặc xoá trước khi chạy tool');
+         if (all('button').some(e => ['Xoá câu lệnh', 'Clear prompt'].includes(label(e)))) throw new Error('Ô tạo đang có ảnh được chọn; hãy lưu hoặc xoá lựa chọn trước khi chạy tool');
+--- a/tests/ui_video_selectors.test.cjs
++++ b/tests/ui_video_selectors.test.cjs
+@@ -7,7 +7,7 @@
+ function fixture() {
+   let clicked = 0;
+   const settings = {disabled: false, getClientRects: () => [1], click: () => clicked++};
+-  const editor = {textContent: '', getClientRects: () => [1]};
++  const editor = {textContent: '', getClientRects: () => [1], querySelectorAll: () => []};
+   const context = vm.createContext({
+     setTimeout,
+     location: {pathname: '/project/test'},

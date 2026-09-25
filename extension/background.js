@@ -298,22 +298,43 @@ function keepAlive() {
 }
 
 async function handleUiVideo(msg) {
+  const mode = msg.params?.mode || 'generate';
+  addRequestLog({id: msg.id, type: `UI:${mode}`, time: new Date().toISOString(),
+    status: 'processing', error: null, url: 'ui_generate_video',
+    payloadSummary: `Project ${msg.params?.projectId || ''}`});
   try {
-    const projectId = msg.params?.projectId;
-    if (!/^[0-9a-f-]{36}$/i.test(projectId || '')) throw new Error('Project ID không hợp lệ');
-    const tabs = await chrome.tabs.query({url: `https://flow.google.com/project/${projectId}*`});
-    const tab = tabs.find(t => t.active && !t.discarded) || tabs.find(t => !t.discarded);
-    if (!tab) throw new Error('Mở đúng project Flow trong Chrome rồi thử lại');
+    const projectId = String(msg.params?.projectId || '').trim().toLowerCase();
+    if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(projectId)) throw new Error('Project ID không hợp lệ');
+    const tabs = await chrome.tabs.query({url: flowUrls});
+    const matching = tabs.filter(t => {
+      try {
+        const url = new URL(t.url);
+        return url.origin === 'https://flow.google.com' &&
+          url.pathname.replace(/\/+$/, '').toLowerCase() === `/project/${projectId}`;
+      } catch { return false; }
+    });
+    const tab = matching.find(t => t.active && !t.discarded) || matching.find(t => !t.discarded);
+    if (!tab) {
+      const reason = matching.length
+        ? 'Tab project đang ngủ. Chọn tab Flow để tải lại rồi thử lại.'
+        : `Không tìm thấy tab project ${projectId} trong profile Chrome đang kết nối. Mở liên kết dự án trong cùng profile đã cài Flow Kit; kiểm tra cả cửa sổ ẩn danh và các profile khác.`;
+      updateRequestLog(msg.id, {status: 'failed', error: reason});
+      // This response is sent before injecting or interacting with the page.
+      sendToAgent({id: msg.id, status: 409, code: 'UI_PROJECT_TAB_UNAVAILABLE', error: `UI_VIDEO: ${reason}`});
+      return;
+    }
     await chrome.scripting.executeScript({target: {tabId: tab.id}, files: ['ui-video.js']});
     const [response] = await chrome.scripting.executeScript({
       target: {tabId: tab.id},
       func: async params => globalThis.flowKitUI.run(params),
-      args: [msg.params],
+      args: [{...msg.params, projectId}],
     });
     const result = response?.result;
     if (!result || result.error) throw new Error(result?.error || 'Không nhận được kết quả từ tab Flow');
+    updateRequestLog(msg.id, {status: 'success', httpStatus: 200});
     sendToAgent({id: msg.id, status: 200, data: result});
   } catch (error) {
+    updateRequestLog(msg.id, {status: 'failed', error: error.message});
     sendToAgent({id: msg.id, status: 502, error: `UI_VIDEO: ${error.message}`});
   }
 }

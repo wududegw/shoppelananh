@@ -7,7 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, '../extension/ui-video.js'),
 function fixture() {
   let clicked = 0;
   const settings = {disabled: false, getClientRects: () => [1], click: () => clicked++};
-  const editor = {textContent: '', getClientRects: () => [1]};
+  const editor = {textContent: '', getClientRects: () => [1], querySelectorAll: () => []};
   const context = vm.createContext({
     setTimeout,
     location: {pathname: '/project/test'},
