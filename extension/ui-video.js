@@ -1,6 +1,6 @@
 // Use Flow's visible composer. Submission is never retried automatically.
 (() => {
-  if (globalThis.flowKitUI?.version === 16) return;
+  if (globalThis.flowKitUI?.version === 17) return;
   let busy = false;
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const shown = e => !!e?.getClientRects().length;
@@ -14,11 +14,12 @@
   const key = url => { try { const u = new URL(url); return u.origin + u.pathname; } catch { return ''; } };
   const mediaId = url => { try { return new URL(url).pathname.split('/').filter(Boolean).pop(); } catch { return ''; } };
   const thumbs = () => all('img.thumbnail').filter(e => /video/i.test(e.alt));
-  const reason = 'Mở trang project Flow, đóng khung trò chuyện Agent (dấu ×), để hiện ô tạo ở dưới cùng rồi thử lại.';
+  const reason = 'Chưa nhận diện được ô tạo Flow. Mở trang project và để hiện ô nhập cùng nút cài đặt video. Nếu đã hiện, giao diện tài khoản này có thể chưa được tool hỗ trợ.';
   function probe() {
     const ready = settings().length === 1 && !!editor() && !location.pathname.includes('/edit/');
     const input = editor();
-    return {version: 16, ready, reason: ready ? '' : reason, path: location.pathname,
+    return {version: 17, ready, reason: ready ? '' : reason, path: location.pathname,
+      diagnostics: {settingsCount: settings().length, editorFound: !!input},
       promptState: {textLength: clean(input?.textContent).length, renderedLength: clean(input?.innerText).length,
         paragraphs: input?.querySelectorAll('p').length || 0, breaks: input?.querySelectorAll('br').length || 0}};
   }
@@ -45,6 +46,17 @@
     if (option.getAttribute('aria-checked') !== 'true') option.click();
     await waitFor(() => names.map(radio).some(e => e?.getAttribute('aria-checked') === 'true'), `Không chọn được ${names.join('/')}`);
   }
+  async function configureVideo(params) {
+    // Model, resolution and duration belong to the user's Flow configuration.
+    // Veo exposes fixed 8s/720p in the summary, not selectable radio controls.
+    if (!radio('Video')) { settings()[0].click(); await waitFor(() => radio('Video'), 'Không mở được cài đặt video'); }
+    await select(['Video']);
+    await select(['Thành phần', 'Ingredients']);
+    await select([params.aspect === 'VIDEO_ASPECT_RATIO_LANDSCAPE' ? '16:9' : '9:16']);
+    await select(['x1']);
+    settings()[0].click();
+    await waitFor(() => !radio('Video'), 'Không đóng được bảng cài đặt');
+  }
   async function insertPrompt(prompt) {
     // ProseMirror may split multiline insertText into paragraphs: textContent
     // joins them without separators. Send the same words as one paragraph.
@@ -68,7 +80,7 @@
     }, 'Không nhập được prompt; chưa gửi yêu cầu', 3000);
   }
   globalThis.flowKitUI = {
-    version: 16,
+    version: 17,
     async run(params) {
       if (params.mode === 'probe') return probe();
       if (busy) return {error: 'UI_VIDEO: Tab đang tạo video khác'};
@@ -85,16 +97,7 @@
         await waitFor(() => probe().ready, reason);
         if (clean(editor().textContent)) throw new Error('Ô prompt đang có nội dung; hãy lưu hoặc xoá trước khi chạy tool');
         if (all('button').some(e => ['Xoá câu lệnh', 'Clear prompt'].includes(label(e)))) throw new Error('Ô tạo đang có ảnh được chọn; hãy lưu hoặc xoá lựa chọn trước khi chạy tool');
-        // A user may have left this popover open. Never toggle it closed by accident.
-        if (!radio('Video')) { settings()[0].click(); await waitFor(() => radio('Video'), 'Không mở được cài đặt video'); }
-        await select(['Video']);
-        await select(['Thành phần', 'Ingredients']);
-        await select([params.aspect === 'VIDEO_ASPECT_RATIO_LANDSCAPE' ? '16:9' : '9:16']);
-        await select(['720p']);
-        await select(['6 giây', '6 seconds', '6s']);
-        await select(['x1']);
-        settings()[0].click();
-        await waitFor(() => !radio('Video'), 'Không đóng được bảng cài đặt');
+        await configureVideo(params);
         const images = params.images?.length ? params.images : [{imageId: params.imageId, imageName: params.imageName}];
         if (images.length > 3) throw new Error('Tối đa 3 ảnh tham chiếu cho Studio');
         for (const asset of images) {
