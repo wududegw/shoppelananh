@@ -135,9 +135,6 @@ async def studio_upload_image(body: UploadBase64ImageRequest):
     client = get_flow_client()
     if not client.connected:
         raise HTTPException(503, "Extension chưa kết nối! Vui lòng mở Chrome đăng nhập flow.google.com")
-    if os.environ.get('FLOW_VIDEO_TRANSPORT', 'batch') == 'ui':
-        await _check_ui_ready()
-
     b64_str = body.image_base64
     mime = "image/png"
     if "," in b64_str:
